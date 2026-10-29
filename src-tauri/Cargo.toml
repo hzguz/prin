@@ -1,6 +1,6 @@
 [package]
 name = "prin"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fast in-place screen capture and annotation tool for Windows and macOS"
 authors = ["hzguz"]
 license = "MIT"
