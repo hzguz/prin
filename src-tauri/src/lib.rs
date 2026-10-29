@@ -17,18 +17,24 @@ mod dxgi_capture;
 use std::{
     env,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        Mutex,
     },
     time::Duration,
 };
 
+#[cfg(not(target_os = "macos"))]
+use std::sync::{atomic::AtomicU64, Arc};
+
 use capture::capture_virtual_desktop;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+
+#[cfg(not(target_os = "macos"))]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -43,9 +49,9 @@ const SHORTCUT_KEY: &str = "captureShortcut";
 const LANGUAGE_KEY: &str = "language";
 
 /// Fallback chain used when the user has not chosen a shortcut.
-///
-/// Win+Shift+S is absent deliberately because Windows reserves that chord at
-/// the OS level.
+#[cfg(target_os = "macos")]
+const DEFAULT_SHORTCUTS: [&str; 3] = ["Cmd+Shift+X", "Cmd+Shift+P", "Ctrl+Shift+X"];
+#[cfg(not(target_os = "macos"))]
 const DEFAULT_SHORTCUTS: [&str; 3] = ["Ctrl+Shift+X", "Ctrl+Shift+P", "Alt+Shift+S"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -125,6 +131,10 @@ struct OverlayCaptureRequest(AtomicBool);
 #[derive(Default)]
 struct OverlayClosing(AtomicBool);
 
+/// Restores the launcher after capture only when it was visible beforehand.
+#[derive(Default)]
+struct RestoreMainAfterCapture(AtomicBool);
+
 /// PNG captured before the overlay is allowed to touch focus or z-order.
 ///
 /// This preserves transient UI such as web dropdowns and modals that disappear
@@ -166,8 +176,8 @@ fn parse_shortcut(label: &str) -> Option<Shortcut> {
         match part.to_ascii_lowercase().as_str() {
             "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
             "shift" => modifiers |= Modifiers::SHIFT,
-            "alt" => modifiers |= Modifiers::ALT,
-            "win" | "super" | "meta" | "cmd" => modifiers |= Modifiers::SUPER,
+            "alt" | "option" => modifiers |= Modifiers::ALT,
+            "win" | "super" | "meta" | "cmd" | "command" => modifiers |= Modifiers::SUPER,
             other => key_code = parse_key_code(other),
         }
     }
@@ -539,8 +549,10 @@ async fn reveal_overlay(
     } else {
         Ok(())
     };
+    result?;
+
     request.0.store(false, Ordering::SeqCst);
-    result
+    Ok(())
 }
 
 fn hide_overlay_window(app: &AppHandle) -> Result<(), String> {
@@ -559,7 +571,18 @@ fn hide_overlay_window(app: &AppHandle) -> Result<(), String> {
     } else {
         Ok(())
     };
+    let restore_main = app
+        .state::<RestoreMainAfterCapture>()
+        .0
+        .swap(false, Ordering::SeqCst);
+    let restore_result = if restore_main {
+        show_main_window(&app).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    };
+
     app.state::<OverlayClosing>().0.store(false, Ordering::SeqCst);
+    restore_result?;
     result
 }
 
@@ -595,16 +618,23 @@ fn show_overlay(app: &AppHandle, hide_main_before_capture: bool) -> tauri::Resul
         *pending = None;
     }
 
+    let mut restore_main = false;
     if let Some(main) = app.get_webview_window(MAIN_WINDOW) {
         // Hotkey/tray captures normally preserve focus so transient UI in the
         // active application stays open. If our own launcher is visible,
-        // however, it must leave the frame before pixels are captured.
-        if hide_main_before_capture || main.is_visible().unwrap_or(false) {
+        // however, it must leave the frame before pixels are captured. Return
+        // to it after the capture if it was visible before we hid it.
+        let was_visible = main.is_visible().unwrap_or(false);
+        if hide_main_before_capture || was_visible {
+            restore_main = was_visible;
             disable_overlay_transitions(&main);
             let _ = main.hide();
             flush_windows_compositor();
         }
     }
+    app.state::<RestoreMainAfterCapture>()
+        .0
+        .store(restore_main, Ordering::SeqCst);
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
@@ -697,10 +727,29 @@ fn build_overlay_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> 
 
     disable_overlay_transitions(&window);
     size_overlay_window(&window)?;
+    #[cfg(target_os = "macos")]
+    elevate_overlay_above_system_ui(&window)?;
 
     // Deliberately left hidden: the frontend claims a pending request, takes
     // the screenshot and reveals only after that frame has been painted.
     Ok(window)
+}
+
+/// Places the capture overlay above the Dock, menu bar, and fullscreen Spaces.
+#[cfg(target_os = "macos")]
+fn elevate_overlay_above_system_ui(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior, NSScreenSaverWindowLevel};
+
+    window.with_webview(|webview| unsafe {
+        let ns_window = &*webview.ns_window().cast::<NSWindow>();
+        ns_window.setLevel(NSScreenSaverWindowLevel);
+        ns_window.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+    })?;
+
+    Ok(())
 }
 
 fn size_overlay_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
@@ -767,7 +816,23 @@ fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
         window.show()?;
         window.unminimize()?;
         window.set_focus()?;
+        #[cfg(target_os = "macos")]
+        let _ = setup_macos_window(&window);
     }
+    Ok(())
+}
+
+/// Applies native macOS styling and shadows to the launcher window.
+#[cfg(target_os = "macos")]
+fn setup_macos_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use objc2_app_kit::NSWindow;
+
+    window.with_webview(|webview| unsafe {
+        let ns_window = &*webview.ns_window().cast::<NSWindow>();
+        ns_window.setHasShadow(true);
+        ns_window.invalidateShadow();
+    })?;
+
     Ok(())
 }
 
@@ -780,7 +845,7 @@ fn tray_double_click_delay() -> Duration {
     Duration::from_millis(unsafe { GetDoubleClickTime() } as u64 + 40)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn tray_double_click_delay() -> Duration {
     Duration::from_millis(320)
 }
@@ -812,7 +877,17 @@ fn disable_overlay_transitions(window: &tauri::WebviewWindow) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn disable_overlay_transitions(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowAnimationBehavior};
+
+    let _ = window.with_webview(|webview| {
+        let ns_window = unsafe { &*webview.ns_window().cast::<NSWindow>() };
+        ns_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    });
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn disable_overlay_transitions(_window: &tauri::WebviewWindow) {}
 
 #[cfg(target_os = "windows")]
@@ -892,6 +967,7 @@ pub fn run() {
         .manage(ShortcutRecording::default())
         .manage(OverlayCaptureRequest::default())
         .manage(OverlayClosing::default())
+        .manage(RestoreMainAfterCapture::default())
         .manage(PendingCapture::default())
         .manage(TrayState::default())
         .invoke_handler(tauri::generate_handler![
@@ -910,6 +986,14 @@ pub fn run() {
             set_autostart,
             open_settings
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == MAIN_WINDOW {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let launched_from_autostart = env::args().any(|arg| arg == "--autostart");
@@ -961,6 +1045,12 @@ pub fn run() {
 
             build_tray(&handle, registered.as_deref())?;
 
+            #[cfg(target_os = "macos")]
+            {
+                let app_menu = tauri::menu::Menu::default(&handle)?;
+                let _ = app.set_menu(app_menu);
+            }
+
             // Pre-warm the hidden overlay webview before showing main so the
             // very first hotkey capture has zero WebView creation latency.
             let _ = build_overlay_window(&handle);
@@ -969,13 +1059,24 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                     window.show()?;
                     window.set_focus()?;
+                    #[cfg(target_os = "macos")]
+                    let _ = setup_macos_window(&window);
                 }
             }
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                if !has_visible_windows {
+                    let _ = show_main_window(app);
+                }
+            }
+            _ => {}
+        });
 }
 
 /// Builds the system tray icon and its context menu.
@@ -997,14 +1098,26 @@ fn build_tray(app: &AppHandle, shortcut_label: Option<&str>) -> tauri::Result<()
     )?;
     let quit_item = MenuItem::with_id(app, "quit", lang.tray_quit_label(), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&capture_item, &settings_item, &quit_item])?;
+
+    #[cfg(target_os = "macos")]
+    let tray_image = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    #[cfg(not(target_os = "macos"))]
+    let tray_image = app.default_window_icon().unwrap().clone();
+
+    #[cfg(not(target_os = "macos"))]
     let click_generation = Arc::new(AtomicU64::new(0));
+    #[cfg(not(target_os = "macos"))]
     let suppress_click_after_double = Arc::new(AtomicBool::new(false));
 
-    let tray_icon = TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().unwrap().clone())
+    let tray_builder = TrayIconBuilder::with_id("main-tray").icon(tray_image);
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true).show_menu_on_left_click(true);
+    #[cfg(not(target_os = "macos"))]
+    let tray_builder = tray_builder.show_menu_on_left_click(false);
+
+    let tray_builder = tray_builder
         .tooltip(lang.tray_tooltip())
         .menu(&menu)
-        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "capture" => {
                 let _ = show_overlay(app, false);
@@ -1018,51 +1131,54 @@ fn build_tray(app: &AppHandle, shortcut_label: Option<&str>) -> tauri::Result<()
             }
             "quit" => app.exit(0),
             _ => {}
-        })
-        .on_tray_icon_event({
-            let click_generation = Arc::clone(&click_generation);
-            let suppress_click_after_double = Arc::clone(&suppress_click_after_double);
+        });
 
-            move |tray, event| match event {
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                } => {
-                    // Invalidate the pending first click before opening the app.
-                    click_generation.fetch_add(1, Ordering::SeqCst);
-                    // Windows emits a final button-up Click after DoubleClick.
-                    // Suppress it so opening the app never also starts capture.
-                    suppress_click_after_double.store(true, Ordering::SeqCst);
-                    let _ = show_main_window(tray.app_handle());
+    #[cfg(not(target_os = "macos"))]
+    let tray_builder = tray_builder.on_tray_icon_event({
+        let click_generation = Arc::clone(&click_generation);
+        let suppress_click_after_double = Arc::clone(&suppress_click_after_double);
+
+        move |tray, event| match event {
+            TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => {
+                // Invalidate the pending first click before opening the app.
+                click_generation.fetch_add(1, Ordering::SeqCst);
+                // Windows emits a final button-up Click after DoubleClick.
+                // Suppress it so opening the app never also starts capture.
+                suppress_click_after_double.store(true, Ordering::SeqCst);
+                let _ = show_main_window(tray.app_handle());
+            }
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } => {
+                if suppress_click_after_double.swap(false, Ordering::SeqCst) {
+                    return;
                 }
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } => {
-                    if suppress_click_after_double.swap(false, Ordering::SeqCst) {
+
+                let ticket = click_generation.fetch_add(1, Ordering::SeqCst) + 1;
+                let generation = Arc::clone(&click_generation);
+                let app_handle = tray.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(tray_double_click_delay());
+                    if generation.load(Ordering::SeqCst) != ticket {
                         return;
                     }
 
-                    let ticket = click_generation.fetch_add(1, Ordering::SeqCst) + 1;
-                    let generation = Arc::clone(&click_generation);
-                    let app_handle = tray.app_handle().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(tray_double_click_delay());
-                        if generation.load(Ordering::SeqCst) != ticket {
-                            return;
-                        }
-
-                        let scheduled_handle = app_handle.clone();
-                        let _ = app_handle.run_on_main_thread(move || {
-                            let _ = show_overlay(&scheduled_handle, false);
-                        });
+                    let scheduled_handle = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        let _ = show_overlay(&scheduled_handle, false);
                     });
-                }
-                _ => {}
+                });
             }
-        })
-        .build(app)?;
+            _ => {}
+        }
+    });
+
+    let tray_icon = tray_builder.build(app)?;
 
     if let Ok(mut slot) = app.state::<TrayState>().0.lock() {
         *slot = Some(TrayHandles {

@@ -1,5 +1,10 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { IconMinus, IconSettings, IconSquare, IconX } from '@tabler/icons-react';
+import {
+  IconMinus,
+  IconSettings,
+  IconSquare,
+  IconX,
+} from '@tabler/icons-react';
 import appIcon from '../../assets/app-icon.svg';
 import { useI18n } from '../../i18n';
 
@@ -11,12 +16,18 @@ interface TitleBarProps {
 export function TitleBar({ activeTab, onTabChange }: TitleBarProps) {
   const appWindow = getCurrentWindow();
   const t = useI18n((state) => state.t);
+  const isMacOS = document.body.dataset.platform === 'macos';
 
   return (
-    <header className="flex h-12 shrink-0 items-stretch border-b border-white/7 bg-surface-900/92 backdrop-blur-xl">
+    <header
+      data-tauri-drag-region
+      className={`flex h-12 shrink-0 items-center border-b border-white/7 bg-surface-900/92 backdrop-blur-xl ${
+        isMacOS ? 'pl-24 pr-4' : 'pl-4 pr-0'
+      }`}
+    >
       <div
         data-tauri-drag-region
-        className="flex min-w-0 flex-1 items-center gap-4 px-4"
+        className="flex min-w-0 flex-1 items-center gap-4"
         onDoubleClick={(event) => {
           if ((event.target as HTMLElement).closest('button')) return;
           void appWindow.toggleMaximize();
@@ -45,17 +56,19 @@ export function TitleBar({ activeTab, onTabChange }: TitleBarProps) {
         </nav>
       </div>
 
-      <div className="flex shrink-0">
-        <WindowButton label={t.titleBar.minimize} onClick={() => void appWindow.minimize()}>
-          <IconMinus size={16} stroke={1.6} />
-        </WindowButton>
-        <WindowButton label={t.titleBar.maximize} onClick={() => void appWindow.toggleMaximize()}>
-          <IconSquare size={13} stroke={1.6} />
-        </WindowButton>
-        <WindowButton label={t.titleBar.closeToTray} danger onClick={() => void appWindow.hide()}>
-          <IconX size={17} stroke={1.6} />
-        </WindowButton>
-      </div>
+      {!isMacOS && (
+        <div className="flex h-full shrink-0">
+          <WindowButton label={t.titleBar.minimize} onClick={() => void appWindow.minimize()}>
+            <IconMinus size={16} stroke={1.6} />
+          </WindowButton>
+          <WindowButton label={t.titleBar.maximize} onClick={() => void appWindow.toggleMaximize()}>
+            <IconSquare size={13} stroke={1.6} />
+          </WindowButton>
+          <WindowButton label={t.titleBar.closeToTray} danger onClick={() => void appWindow.hide()}>
+            <IconX size={17} stroke={1.6} />
+          </WindowButton>
+        </div>
+      )}
     </header>
   );
 }

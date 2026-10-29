@@ -614,6 +614,7 @@ export function CaptureOverlay() {
         alt=""
         draggable={false}
         className="pointer-events-none absolute inset-0 h-full w-full"
+        style={{ imageRendering: '-webkit-optimize-contrast' }}
       />
 
       <div className="pointer-events-none absolute inset-0 bg-black/45" />
@@ -625,10 +626,10 @@ export function CaptureOverlay() {
         <div
           className="pointer-events-none absolute overflow-hidden"
           style={{
-            left: selection.x,
-            top: selection.y,
-            width: selection.width,
-            height: selection.height,
+            left: Math.round(selection.x),
+            top: Math.round(selection.y),
+            width: Math.round(selection.width),
+            height: Math.round(selection.height),
           }}
         >
           <img
@@ -636,7 +637,11 @@ export function CaptureOverlay() {
             alt=""
             draggable={false}
             className="absolute h-screen w-screen max-w-none"
-            style={{ left: -selection.x, top: -selection.y }}
+            style={{
+              left: -Math.round(selection.x),
+              top: -Math.round(selection.y),
+              imageRendering: '-webkit-optimize-contrast',
+            }}
           />
         </div>
       )}

@@ -1,6 +1,6 @@
 [package]
 name = "prin"
-version = "0.1.1"
+version = "0.1.2"
 description = "Fast in-place screen capture and annotation tool for Windows and macOS"
 authors = ["hzguz"]
 license = "MIT"
@@ -42,6 +42,9 @@ windows = { version = "0.62.2", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Gdi",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", features = ["NSWindow"] }
 
 # Screen capture and encoding dominate debug capture latency. Optimizing only
 # the capture and image pipeline keeps fast incremental builds for our code

@@ -62,6 +62,19 @@ body[data-window='overlay'] {
   background: transparent;
 }
 
+body[data-window='overlay'] img {
+  image-rendering: -webkit-optimize-contrast;
+}
+
+body[data-window='main'][data-platform='macos'] {
+  background: transparent;
+}
+
+body[data-window='main'][data-platform='macos'] .app-shell {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 input,
 textarea {
   user-select: text;

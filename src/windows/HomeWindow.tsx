@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState } from 'react';
 import {
   IconBolt,
@@ -48,6 +49,47 @@ export function HomeWindow() {
       setCapturing(false);
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isMac = document.body.dataset.platform === 'macos';
+      const isMod = isMac ? event.metaKey : event.ctrlKey;
+
+      if (isMod && event.key.toLowerCase() === 'w') {
+        event.preventDefault();
+        void getCurrentWindow().hide();
+        return;
+      }
+      if (isMod && event.key === ',') {
+        event.preventDefault();
+        setActiveTab('settings');
+        return;
+      }
+      if (isMod && event.key === '1') {
+        event.preventDefault();
+        setActiveTab('home');
+        return;
+      }
+      if (isMod && event.key === '2') {
+        event.preventDefault();
+        setActiveTab('settings');
+        return;
+      }
+      if (isMod && event.key === 'Enter' && activeTab === 'home') {
+        event.preventDefault();
+        void startCapture();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        void getCurrentWindow().hide();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab]);
 
   return (
     <div className="app-shell flex h-screen flex-col overflow-hidden bg-surface-900">
@@ -136,7 +178,7 @@ export function HomeWindow() {
 
       <footer className="flex h-9 shrink-0 items-center justify-between border-t border-white/6 px-4 text-[10px] text-content-muted">
         <span>{t.home.trayFooter}</span>
-        <span className="font-mono">v0.1.0</span>
+        <span className="font-mono">v0.1.1</span>
       </footer>
     </div>
   );

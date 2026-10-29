@@ -21,9 +21,8 @@ function resolveRole(): WindowRole {
 export default function App() {
   const role = resolveRole();
 
-  // The overlay needs a transparent body; the stylesheet keys off this.
+  // Keep locale initialization after selecting the active window role.
   useEffect(() => {
-    document.body.dataset.window = role;
     initI18nSync();
   }, [role]);
 

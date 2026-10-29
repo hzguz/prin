@@ -71,6 +71,7 @@ function renderStageCanvas(stage: Konva.Stage, options: ExportOptions): HTMLCanv
         rendered.height = firstCanvas.height;
         const context = rendered.getContext('2d');
         if (context) {
+          context.imageSmoothingEnabled = false;
           for (const layer of layers) {
             context.drawImage(layer.getCanvas()._canvas, 0, 0);
           }
@@ -256,9 +257,19 @@ export function cropCapture(
   devicePixelRatio: number,
 ): HTMLCanvasElement {
   // Selection arrives in CSS pixels; the capture is in physical pixels.
-  const scale = devicePixelRatio;
-  const width = Math.max(1, Math.round(region.width * scale));
-  const height = Math.max(1, Math.round(region.height * scale));
+  const naturalWidth = 'naturalWidth' in source ? source.naturalWidth : source.width;
+  const naturalHeight = 'naturalHeight' in source ? source.naturalHeight : source.height;
+  const scaleX =
+    typeof window !== 'undefined' && window.innerWidth > 0 && naturalWidth > 0
+      ? naturalWidth / window.innerWidth
+      : devicePixelRatio;
+  const scaleY =
+    typeof window !== 'undefined' && window.innerHeight > 0 && naturalHeight > 0
+      ? naturalHeight / window.innerHeight
+      : devicePixelRatio;
+
+  const width = Math.max(1, Math.round(region.width * scaleX));
+  const height = Math.max(1, Math.round(region.height * scaleY));
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -267,10 +278,12 @@ export function cropCapture(
   const context = canvas.getContext('2d');
   if (!context) throw new Error('canvas 2d context unavailable');
 
+  context.imageSmoothingEnabled = false;
+
   context.drawImage(
     source,
-    Math.round(region.x * scale),
-    Math.round(region.y * scale),
+    Math.round(region.x * scaleX),
+    Math.round(region.y * scaleY),
     width,
     height,
     0,

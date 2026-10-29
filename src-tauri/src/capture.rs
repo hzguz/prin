@@ -21,6 +21,7 @@ pub struct MonitorBounds {
     pub height: u32,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DesktopRect {
     left: i32,
@@ -29,6 +30,7 @@ struct DesktopRect {
     bottom: i32,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl From<&MonitorBounds> for DesktopRect {
     fn from(bounds: &MonitorBounds) -> Self {
         Self {
@@ -50,6 +52,15 @@ pub enum CaptureError {
     MonitorCapture { name: String, reason: String },
     #[error("failed to encode capture as PNG: {0}")]
     Encode(String),
+    #[error("Screen recording permission required. Please allow prin in System Settings > Privacy & Security > Screen Recording.")]
+    PermissionDenied,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
 }
 
 /// Captures every monitor and composites them into one virtual-desktop image.
@@ -183,14 +194,24 @@ fn capture_monitor_image(
 ) -> Result<RgbaImage, CaptureError> {
     monitor
         .capture_image()
-        .map_err(|error| CaptureError::MonitorCapture {
-            name: name.to_owned(),
-            reason: error.to_string(),
+        .map_err(|error| {
+            #[cfg(target_os = "macos")]
+            unsafe {
+                if !CGPreflightScreenCaptureAccess() {
+                    CGRequestScreenCaptureAccess();
+                    return CaptureError::PermissionDenied;
+                }
+            }
+            CaptureError::MonitorCapture {
+                name: name.to_owned(),
+                reason: error.to_string(),
+            }
         })
 }
 
 /// A small tolerance absorbs invisible borders on borderless fullscreen
 /// windows while still rejecting ordinary maximized windows with taskbars.
+#[cfg(any(target_os = "windows", test))]
 fn covers_monitor(window: DesktopRect, monitor: &MonitorBounds) -> bool {
     const TOLERANCE: i32 = 3;
     let monitor = DesktopRect::from(monitor);
