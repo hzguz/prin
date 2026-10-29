@@ -109,16 +109,7 @@ pnpm tauri build   # Build production installer (.exe / .msi on Windows, .dmg on
 
 ### macOS release signing
 
-The release workflow signs and notarizes macOS `.dmg` files so Gatekeeper can open them. Configure these GitHub Actions repository secrets before publishing a release tag:
-
-- `APPLE_CERTIFICATE`: base64-encoded `.p12` Developer ID Application certificate
-- `APPLE_CERTIFICATE_PASSWORD`: password used when exporting that certificate
-- `APPLE_SIGNING_IDENTITY`: certificate identity, for example `Developer ID Application: Your Name (TEAMID)`
-- `APPLE_ID`: Apple Developer account email
-- `APPLE_PASSWORD`: app-specific password for that Apple ID
-- `APPLE_TEAM_ID`: Apple Developer team ID
-
-The macOS release jobs stop before building if any of these secrets is missing, preventing unsigned installers from being published.
+macOS builds use an ad-hoc code signature (`signingIdentity: "-"`) and do not require Apple Developer credentials. This signs the complete app bundle so Gatekeeper does not mistake it for a damaged app. Since the app is not notarized, macOS may still show an unidentified developer warning; users can open it with **Control-click → Open** or allow it in **System Settings → Privacy & Security**.
 
 ## License
 
