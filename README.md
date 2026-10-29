@@ -107,6 +107,19 @@ pnpm tauri build   # Build production installer (.exe / .msi on Windows, .dmg on
 - **Windows**: MSVC Build Tools (C++ workload) and WebView2 Runtime
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
 
+### macOS release signing
+
+The release workflow signs and notarizes macOS `.dmg` files so Gatekeeper can open them. Configure these GitHub Actions repository secrets before publishing a release tag:
+
+- `APPLE_CERTIFICATE`: base64-encoded `.p12` Developer ID Application certificate
+- `APPLE_CERTIFICATE_PASSWORD`: password used when exporting that certificate
+- `APPLE_SIGNING_IDENTITY`: certificate identity, for example `Developer ID Application: Your Name (TEAMID)`
+- `APPLE_ID`: Apple Developer account email
+- `APPLE_PASSWORD`: app-specific password for that Apple ID
+- `APPLE_TEAM_ID`: Apple Developer team ID
+
+The macOS release jobs stop before building if any of these secrets is missing, preventing unsigned installers from being published.
+
 ## License
 
 MIT
